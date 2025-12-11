@@ -30,20 +30,35 @@ def run_traj(env, adj_net, hnet, hnet_decoder, env_name,
     
     # Run optimal trajectory
     q = torch.tensor(env.sample_q(num_trajs, mode='test'), dtype=torch.float)
+    if save_video:
+        q_0, _ = env.gym_env.reset()
+        q = torch.tensor([q_0], dtype=torch.float)
     p = adj_net(q)
+    print(q.shape)
+    print(p.shape)
     qp = torch.cat((q, p), axis=1)
+
     traj = odeint(HDnet, qp, torch.tensor(time_steps, requires_grad=False))
     print('Done finding trajectory...')
-
+    print(traj[-1][-1])
+ 
     # Collect results and optionally save to videos
     final_costs = []
-    for e in traj:
-        qe, _ = torch.chunk(e, 2, dim=1)
-        qe_np = qe.detach().numpy()
-        final_costs.append(env.eval(qe_np))
-        if save_video:
+ 
+    q, _ = torch.chunk(qp, 2, dim=1)
+    q_np = q.detach().numpy()
+    final_costs.append(env.eval(q_np))
+    for i in range(0, len(time_steps) - 1):
+        q_np = q.detach().numpy()
+        final_costs.append(env.eval(q_np))
+        control_coef = 0.5
+        u_hat = -(1.0/control_coef)*np.einsum('ijk,ij->ik', env.f_u(q_np), adj_net(q.to(torch.float32)).detach().numpy())
+        # if save_video:
             # Write rendering image
-            out.write(env.render(qe_np.reshape(-1)))
+            # out.write(env.render(u_hat[0]))
+
+        time_step = time_steps[i + 1] - time_steps[i]
+        q = env.step(q, torch.tensor(u_hat), dt=time_step)
 
     # Release video
     if save_video:

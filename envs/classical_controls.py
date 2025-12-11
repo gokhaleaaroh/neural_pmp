@@ -5,6 +5,7 @@ import math
 import gymnasium as gym
 from gym.utils import seeding
 from os import path
+import torch
 
 ### Generic continuous environment for reduced Hamiltonian dynamics framework
 class ContinuousEnv():
@@ -76,6 +77,9 @@ class MountainCar(ContinuousEnv):
         self.power = 0.0015
         self.screen_width = 600
         self.screen_height = 400
+        self.gym_env = gym.make("MountainCarContinuous-v0", render_mode="rgb_array")
+        self.gym_env.reset()
+
     
     # (q0, q1) = (position, velocity)
     def f(self, q, u):
@@ -109,67 +113,52 @@ class MountainCar(ContinuousEnv):
     def _height(self, xs):
         return np.sin(3 * xs) * 0.45 + 0.55
     
-    def render(self, q, mode="rgb_array"):
-        screen_width = self.screen_width
-        screen_height = self.screen_height
+    
+    def step(self,
+             states,
+             actions,             # torch.Tensor shape (N,) or (N,1) or scalar
+             power=0.0015,
+             gravity=0.0025,
+             min_position=-1.2,
+             max_position=0.6,
+             max_speed=0.07,
+             goal_position=0.45,
+             action_penalty_coeff=0.1,
+             dt=1.0,
+             ):
+        """
+        Batched mountain car step using PyTorch tensors.
+        Returns: next_states (N,2), rewards (N,), dones (N,) (bool), info (dict of tensors).
+        """
+        pos = states[:, 0].clone()
+        vel = states[:, 1].clone()
 
-        world_width = self.max_position - self.min_position
-        scale = screen_width / world_width
-        carwidth = 40
-        carheight = 20
+        # Broadcast actions
+        if actions.dim() == 0:
+            actions = actions.expand(pos.shape[0])
+        else:
+            actions = actions.view(-1)
+            if actions.shape[0] == 1 and pos.shape[0] > 1:
+                actions = actions.expand(pos.shape[0])
+            elif actions.shape[0] != pos.shape[0]:
+                raise ValueError("actions must be scalar or length N")
 
-        if self.viewer is None:
-            from gym.envs.classic_control import rendering
+        acc = actions * power - gravity * torch.cos(3.0 * pos)
+        vel = vel + acc * dt
+        vel = torch.clamp(vel, -max_speed, max_speed)
+        pos = pos + vel * dt
 
-            self.viewer = rendering.Viewer(screen_width, screen_height)
-            xs = np.linspace(self.min_position, self.max_position, 100)
-            ys = self._height(xs)
-            xys = list(zip((xs - self.min_position) * scale, ys * scale))
+        next_states = torch.stack([pos, vel], dim=-1)
 
-            self.track = rendering.make_polyline(xys)
-            self.track.set_linewidth(4)
-            self.viewer.add_geom(self.track)
+        return next_states
 
-            clearance = 10
-
-            l, r, t, b = -carwidth / 2, carwidth / 2, carheight, 0
-            car = rendering.FilledPolygon([(l, b), (l, t), (r, t), (r, b)])
-            car.add_attr(rendering.Transform(translation=(0, clearance)))
-            self.cartrans = rendering.Transform()
-            car.add_attr(self.cartrans)
-            self.viewer.add_geom(car)
-            frontwheel = rendering.make_circle(carheight / 2.5)
-            frontwheel.set_color(0.5, 0.5, 0.5)
-            frontwheel.add_attr(
-                rendering.Transform(translation=(carwidth / 4, clearance))
-            )
-            frontwheel.add_attr(self.cartrans)
-            self.viewer.add_geom(frontwheel)
-            backwheel = rendering.make_circle(carheight / 2.5)
-            backwheel.add_attr(
-                rendering.Transform(translation=(-carwidth / 4, clearance))
-            )
-            backwheel.add_attr(self.cartrans)
-            backwheel.set_color(0.5, 0.5, 0.5)
-            self.viewer.add_geom(backwheel)
-            flagx = (self.goal_position - self.min_position) * scale
-            flagy1 = self._height(self.goal_position) * scale
-            flagy2 = flagy1 + 50
-            flagpole = rendering.Line((flagx, flagy1), (flagx, flagy2))
-            self.viewer.add_geom(flagpole)
-            flag = rendering.FilledPolygon(
-                [(flagx, flagy2), (flagx, flagy2 - 10), (flagx + 25, flagy2 - 5)]
-            )
-            flag.set_color(0.8, 0.8, 0)
-            self.viewer.add_geom(flag)
-
-        pos = q[0]
-        self.cartrans.set_translation(
-            (pos - self.min_position) * scale, self._height(pos) * scale
-        )
-        self.cartrans.set_rotation(math.cos(3 * pos))
-
-        return self.viewer.render(return_rgb_array=mode == "rgb_array")
+    def render(self, u, mode="rgb_array"):
+        # print(u)gym_env
+        print("Before: ", self.gym_env.unwrapped.state)
+        self.gym_env.step(u)
+        print("After ", self.gym_env.unwrapped.state)
+        frame = self.gym_env.render()
+        return frame
 
 
 #### CartPole for PMP ####
@@ -190,6 +179,8 @@ class CartPole(ContinuousEnv):
 
         self.screen_width = 600
         self.screen_height = 400 
+        self.gym_env = gym.make("CartPole-v1", render_mode="rgb_array")
+        self.gym_env.reset()
         
     def f(self, q, u):
         _, x_dot, theta, theta_dot = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
@@ -239,66 +230,14 @@ class CartPole(ContinuousEnv):
             a = 0.05
         return np.random.uniform(low=-a, high=a, size=(num_examples, 4))
     
-    def render(self, q, mode="rgb_array"):
-        screen_width = self.screen_width
-        screen_height = self.screen_height
-
-        world_width = self.x_threshold * 2
-        scale = screen_width / world_width
-        carty = 100  # TOP OF CART
-        polewidth = 10.0
-        polelen = scale * (2 * self.length)
-        cartwidth = 50.0
-        cartheight = 30.0
-
-        if self.viewer is None:
-            from gym.envs.classic_control import rendering
-
-            self.viewer = rendering.Viewer(screen_width, screen_height)
-            l, r, t, b = -cartwidth / 2, cartwidth / 2, cartheight / 2, -cartheight / 2
-            axleoffset = cartheight / 4.0
-            cart = rendering.FilledPolygon([(l, b), (l, t), (r, t), (r, b)])
-            self.carttrans = rendering.Transform()
-            cart.add_attr(self.carttrans)
-            self.viewer.add_geom(cart)
-            l, r, t, b = (
-                -polewidth / 2,
-                polewidth / 2,
-                polelen - polewidth / 2,
-                -polewidth / 2,
-            )
-            pole = rendering.FilledPolygon([(l, b), (l, t), (r, t), (r, b)])
-            pole.set_color(0.8, 0.6, 0.4)
-            self.poletrans = rendering.Transform(translation=(0, axleoffset))
-            pole.add_attr(self.poletrans)
-            pole.add_attr(self.carttrans)
-            self.viewer.add_geom(pole)
-            self.axle = rendering.make_circle(polewidth / 2)
-            self.axle.add_attr(self.poletrans)
-            self.axle.add_attr(self.carttrans)
-            self.axle.set_color(0.5, 0.5, 0.8)
-            self.viewer.add_geom(self.axle)
-            self.track = rendering.Line((0, carty), (screen_width, carty))
-            self.track.set_color(0, 0, 0)
-            self.viewer.add_geom(self.track)
-
-            self._pole_geom = pole
-
-        # Edit the pole polygon vertex
-        pole = self._pole_geom
-        l, r, t, b = (
-            -polewidth / 2,
-            polewidth / 2,
-            polelen - polewidth / 2,
-            -polewidth / 2,
-        )
-        pole.v = [(l, b), (l, t), (r, t), (r, b)]
-
-        cartx = q[0] * scale + screen_width / 2.0  # MIDDLE OF CART
-        self.carttrans.set_translation(cartx, carty)
-        self.poletrans.set_rotation(-q[2])
-
-        return self.viewer.render(return_rgb_array=mode=="rgb_array")
+    def render(self, u, mode="rgb_array"):
+        if u[0] >= 0:
+            self.gym_env.step(1)
+        else:
+            self.gym_env.step(0)
+            
+        frame = self.gym_env.render()
+        return frame
     
 def angle_normalize(x):
     return ((x + np.pi) % (2 * np.pi)) - np.pi
