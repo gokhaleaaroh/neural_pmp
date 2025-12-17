@@ -113,17 +113,9 @@ class MountainCar(ContinuousEnv):
     def _height(self, xs):
         return np.sin(3 * xs) * 0.45 + 0.55
     
-    
     def step(self,
              states,
              actions,             # torch.Tensor shape (N,) or (N,1) or scalar
-             power=0.0015,
-             gravity=0.0025,
-             min_position=-1.2,
-             max_position=0.6,
-             max_speed=0.07,
-             goal_position=0.45,
-             action_penalty_coeff=0.1,
              dt=1.0,
              ):
         """
@@ -132,31 +124,17 @@ class MountainCar(ContinuousEnv):
         """
         pos = states[:, 0].clone()
         vel = states[:, 1].clone()
-
-        # Broadcast actions
-        if actions.dim() == 0:
-            actions = actions.expand(pos.shape[0])
-        else:
-            actions = actions.view(-1)
-            if actions.shape[0] == 1 and pos.shape[0] > 1:
-                actions = actions.expand(pos.shape[0])
-            elif actions.shape[0] != pos.shape[0]:
-                raise ValueError("actions must be scalar or length N")
-
-        acc = actions * power - gravity * torch.cos(3.0 * pos)
-        vel = vel + acc * dt
-        vel = torch.clamp(vel, -max_speed, max_speed)
+        update = torch.from_numpy(self.f(states.detach().numpy(), actions.detach().numpy()))
+        vel = vel + update[:, 1] * dt
+        vel = torch.clamp(vel, -self.max_speed, self.max_speed)
         pos = pos + vel * dt
-
         next_states = torch.stack([pos, vel], dim=-1)
-
         return next_states
 
     def render(self, u, mode="rgb_array"):
         # print(u)gym_env
         print("Before: ", self.gym_env.unwrapped.state)
         self.gym_env.step(u)
-        print("After ", self.gym_env.unwrapped.state)
         frame = self.gym_env.render()
         return frame
 

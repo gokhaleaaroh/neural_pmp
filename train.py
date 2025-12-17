@@ -45,7 +45,7 @@ def kl_loss(mu, logvar):
     return torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1), dim=0)
 
 # Train phase 1
-def train_phase_1(env, adj_net, hnet, qs, 
+def train_phase_1(env, adj_net, hnet, policy_net, qs, 
                   T1=1.0, control_coef=0.5, dynamic_hidden=False, 
                   alpha1=1, alpha2=0.1, beta=1, 
                   num_epoch=20, num_iter=20, batch_size=32, lr=1e-3, 
@@ -93,7 +93,11 @@ def train_phase_1(env, adj_net, hnet, qs,
 
             ## Second part of loss function: beta1 * (h(q, p) - ((p, f(q, u)) + L(q, u)))
             # Calculate optimal u = -p^T f_u(q, u) (based on adjoint)
-            u = (1.0/control_coef)*np.einsum('ijk,ij->ik', env.f_u(q_np), -p_np)
+            # u = (1.0/control_coef)*np.einsum('ijk,ij->ik', env.f_u(q_np), -p_np)
+
+            u = policy_net(q_np, -p_np, env.f_u)
+
+
             #print('u', u.shape)
             if dynamic_hidden:
                 # (p, f(q, u)) + L(q, u) = (p, qdot_np) + L(q, u)
@@ -162,9 +166,51 @@ def train_phase_2(adj_net, hnet, hnet_decoder, z_decoder, z_encoder, qs, T2=1.0,
                 total_loss = 0
                 cnt = 0
 
+
+                '''
+ def train_phase_3(adj_net, hnet, hnet_decoder, z_decoder, z_encoder, policy_net, qs, T2=1.0, beta=1.0, 
+                  num_epoch=20, num_iter=20, batch_size=32, lr=1e-3, log_interval=50):
+    
+    hd_vae_net = HDVAE(adj_net, hnet, hnet_decoder, z_encoder, z_decoder, T2)
+    # Optimizer for Hamiltonian net decoder, (additional) latent encoder and decoder
+    optim = torch.optim.Adam(list(polic_net.parameters()), lr=lr)
+    optim.zero_grad()
+    
+    # Training over the same data qs num_epoch epochs
+    num_samples = qs.shape[0]
+    for i in range(num_epoch):
+        print('\nEpoch {}: '.format(i+1))
+        loss = 0; cnt = 0
+        q_dat = torch.clone(qs)[torch.randperm(num_samples)]
+        total_loss = 0
+        for j in range(num_iter):
+            # state training examples
+            q = q_dat[np.random.choice(num_samples, batch_size, replace=False)] #[j*batch_size:(j+1)*batch_size]
+            # Hamiltonian VAE net returns starting coupled state (state+adjoint)
+            # terminal coupled state and its construction, starting state construction
+            # mean and logvar of the actual latent variable mapped from terminal state 
+            qp, qp_hat, qpt, qpt_hat, mu, logvar = hd_vae_net(q)
+            # Reconstruction loss
+            loss = F.smooth_l1_loss(qp, qp_hat) +  F.smooth_l1_loss(qpt, qpt_hat)
+            # KL loss
+            loss += beta * kl_loss(mu, logvar)
+
+            # Optimize step
+            loss.backward()
+            optim.step(); optim.zero_grad()
+            # Print progress
+            total_loss += loss.item()
+            cnt += 1
+            if (j+1) % log_interval == 0:
+                print('Average loss for {}th iteration is: {}'.format(j+1, total_loss/cnt))
+                total_loss = 0
+                cnt = 0
+
+                '''
+
 # Main training including phase 1 and phase 2 sequentially
 def main_training(env, env_name, qs, 
-    adj_net, hnet, hnet_decoder, z_decoder, z_encoder, 
+                  adj_net, hnet, policy_net, hnet_decoder, z_decoder, z_encoder, 
     T1=1, T2=1, control_coef=0.5, dynamic_hidden=False,
     alpha1=1, alpha2=0.1, beta1=1, beta2=1,
     num_epoch1=20, num_epoch2=20, num_iter1=20, num_iter2=20,
@@ -192,7 +238,7 @@ def main_training(env, env_name, qs,
     # Train phase 1 only for deterministic Hamiltonian. NeuralPMP-phase1
     if retrain_phase1:
         print('\nTraining phase 1...')
-        train_phase_1(env, adj_net, hnet, qs, 
+        train_phase_1(env, adj_net, hnet, policy_net, qs, 
             T1, control_coef, dynamic_hidden, alpha1, alpha2, beta1,
             num_epoch1, num_iter1, batch_size1, lr1, log_interval1)
     else:
@@ -221,11 +267,11 @@ def main_training(env, env_name, qs,
         for i in range(num_additional_train):
             print(f'\nRetraining phase 1 with new data {i}th time...')
             # Training using extreme data
-            train_phase_1(env, adj_net, hnet, qs_extreme, 
+            train_phase_1(env, adj_net, hnet, policy_net, qs_extreme, 
                 T1, control_coef, dynamic_hidden, alpha1, alpha2, beta1,
                 num_epoch1, num_iter1, batch_size1, lr1, log_interval1)
             # Training using usual data
-            train_phase_1(env, adj_net, hnet, qs, 
+            train_phase_1(env, adj_net, hnet, policy_net, qs, 
                 T1, control_coef, dynamic_hidden, alpha1, alpha2, beta1,
                 num_epoch1, num_iter1, batch_size1, lr1, log_interval1)
 
@@ -254,7 +300,7 @@ def train(env_name, num_examples, mode=0,
 
     # Main training
     main_training(env, env_name, q_samples, 
-        adj_net, hnet, hnet_decoder, z_decoder, z_encoder, 
+                  adj_net, hnet, policy_net, hnet_decoder, z_decoder, z_encoder, 
         T1=T1, T2=T2, control_coef=control_coef, dynamic_hidden=dynamic_hidden,
         alpha1=alpha1, alpha2=alpha2, beta1=beta1, beta2=beta2,
         num_epoch1=num_epoch1, num_iter1=num_iter1, batch_size1=batch_size1, lr1=lr1, log_interval1=log_interval1, 
