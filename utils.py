@@ -122,7 +122,7 @@ def _tsplot(ax, x, data, mode='bootstrap', **kw):
     return p1, p2
 
 def plot_eval_benchmarks(eval_dict, time_steps, title, mode='bootstrap', 
-                         colors=['red', 'blue', 'green', 'orange'],
+                         colors=['red', 'blue', 'green', 'orange', 'purple', 'teal'],
                          plot_dir='tmp.png'):
     methods = list(eval_dict.keys())
     ax = plt.gca()

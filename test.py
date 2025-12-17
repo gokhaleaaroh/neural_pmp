@@ -41,24 +41,41 @@ def run_traj(env, adj_net, hnet, hnet_decoder, env_name,
     print(traj[-1][-1])
  
     # Collect results and optionally save to videos
-    final_costs = []
+    final_costs_expected = []
+    final_costs_controller = []
  
-    q, _ = torch.chunk(qp, 2, dim=1)
-    q_np = q.detach().numpy()
-    print("State: ", q_np)
-    final_costs.append(env.eval(q_np))
+    qe, _ = torch.chunk(traj[0], 2, dim=1)
+    qe_np = qe.detach().numpy()
+    pe = -adj_net(qe.to(torch.float32))
+
+    qc = qe.clone()
+    qc_np = qc.detach().numpy()
+    pc = adj_net(qc.to(torch.float32))
+
+    # print("State: ", q_np)
     for i in range(0, len(time_steps) - 1):
-        final_costs.append(env.eval(q_np))
+        final_costs_expected.append(env.eval(qe_np))
+        final_costs_controller.append(env.eval(qc_np))
         control_coef = 0.5
-        # u_hat = -(1.0/control_coef)*np.einsum('ijk,ij->ik', env.f_u(q_np), adj_net(q.to(torch.float32)).detach().numpy())
-        u_hat = torch.tensor([[1]])
+        u_hat = (1.0/control_coef)*np.einsum('ijk,ij->ik', env.f_u(qc_np), -pc.detach().numpy())
+        # u_hat = torch.tensor([[1]])
         if save_video:
             # Write rendering image
             out.write(env.render(u_hat[0]))
 
         time_step = time_steps[i + 1] - time_steps[i]
-        q = env.step(q, torch.tensor(u_hat), dt=1)
-        q_np = q.detach().numpy()
+
+        if i < len(time_steps) - 2:
+            qe, _ = torch.chunk(traj[i + 1], 2, dim=1)
+            qe_np = qe.detach().numpy()
+            pe = -adj_net(qe.to(torch.float32))
+
+            qc = env.step(qc, torch.tensor(u_hat), dt=time_step)
+            qc_np = qc.detach().numpy()
+            pc = adj_net(qc.to(torch.float32))
+
+    final_costs_expected.append(env.eval(qe_np))
+    final_costs_controller.append(env.eval(qc_np))
 
     # Release video
     if save_video:
@@ -66,7 +83,7 @@ def run_traj(env, adj_net, hnet, hnet_decoder, env_name,
 
     env.close()
     # (num_traj, num_step)
-    return np.swapaxes(np.array(final_costs, dtype=float), 0, 1)
+    return np.swapaxes(np.array(final_costs_expected, dtype=float), 0, 1), np.swapaxes(np.array(final_costs_controller, dtype=float), 0, 1)
 
 def _test(env_name, num_trajs, time_steps, test_trained, phase2):
     # Initialize models (this first to take state dimension q_dim)
@@ -80,15 +97,18 @@ def _test(env_name, num_trajs, time_steps, test_trained, phase2):
 
 def benchmarks(env_name, num_trajs, time_steps):
     # Calculate result
-    final_costs_untrained = _test(env_name, num_trajs, time_steps, test_trained=False, phase2=False)
-    final_costs_phase_1 = _test(env_name, num_trajs, time_steps, test_trained=True, phase2=False)
-    final_costs_phase_2 = _test(env_name, num_trajs, time_steps, test_trained=True, phase2=True)
+    final_costs_untrained, final_costs_untrained_c = _test(env_name, num_trajs, time_steps, test_trained=False, phase2=False)
+    final_costs_phase_1, final_costs_phase_1_c = _test(env_name, num_trajs, time_steps, test_trained=True, phase2=False)
+    final_costs_phase_2, final_costs_phase_2_c = _test(env_name, num_trajs, time_steps, test_trained=True, phase2=True)
 
     # Draw (statistical) plot
     eval_dict = {
         'Random Hamiltonian': final_costs_untrained,
+        'Random Hamiltonian w/ control': final_costs_untrained_c,
         'NeuralPMP-phase 1': final_costs_phase_1,
-        'NeuralPMP': final_costs_phase_2
+        'NeuralPMP-phase 1 w/ control': final_costs_phase_1_c,
+        'NeuralPMP': final_costs_phase_2,
+        'NeuralPMP w/ control': final_costs_phase_2_c,
     }
     utils.plot_eval_benchmarks(eval_dict, time_steps,
                                title='Benchmarkings on ' + env_name,
@@ -119,4 +139,4 @@ def visualize(env_name, time_steps, test_trained, phase2):
     env = utils.get_environment(env_name) 
     run_traj(env, adj_net, hnet, hnet_decoder, env_name,
              1, time_steps, test_trained, phase2,
-             save_video=False, video_path=video_path)
+             save_video=True, video_path=video_path)

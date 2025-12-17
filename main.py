@@ -22,10 +22,10 @@ q = torch.tensor(env.sample_q(1, mode='test'), dtype=torch.float)
 #     q = env.step(q, torch.tensor([[0.8]]), dt=0.05)
 #     print("Updated position: ", q)
 
-benchmarks(env_name='mountain_car', num_trajs=1, time_steps=list(np.arange(0, 5.0, 0.05)))
+benchmarks(env_name='mountain_car', num_trajs=2000, time_steps=list(np.arange(0, 1.0, 0.05)))
 
 # visualize(env_name='mountain_car', time_steps=list(np.arange(0, 1.0, 0.05)), test_trained=False, phase2=False)
-visualize(env_name='mountain_car', time_steps=list(np.arange(0, 5.0, 0.05)), test_trained=True, phase2=False)
+# visualize(env_name='mountain_car', time_steps=list(np.arange(0, 1.0, 0.05)), test_trained=True, phase2=False)
 # visualize(env_name='mountain_car', time_steps=list(np.arange(0, 1.0, 0.05)), test_trained=True, phase2=True)
 # 
 # 
