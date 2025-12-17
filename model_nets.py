@@ -69,20 +69,18 @@ class HDVAE(nn.Module):
         
         return qp, qp_hat, qpt, qpt_hat, mu, logvar
 
-    '''
 class PolicyRollout(nn.Module):
-    def __init__(self, dynamics, adj_net, hnet, z_decoder, policy_net, T):
+    def __init__(self, dynamics, adj_net, hnet, z_decoder, policy_net, time_steps):
         super(PolicyRollout, self).__init__()
-        self.T = T
+        self.tsteps = time_steps
         self.f = lambda q, z : dynamics(q, policy_net(q, adj_net(q), z))
         self.adj_net = adj_net
         self.hd_net = HDNet(hnet)
         self.z_decoder = z_decoder
 
-    def forward(self, q):
+    def forward(self, q, z):
         times = [0, self.T]
         p = self.adj_net(q)
-        qp = torch.cat((q, p), dim=1)
-        qpt = odeint(torch.cat(()))
 
-    '''
+
+        return qpt

@@ -46,7 +46,7 @@ def kl_loss(mu, logvar):
 
 # Train phase 1
 def train_phase_1(env, adj_net, hnet, policy_net, qs, 
-                  T1=1.0, control_coef=0.5, dynamic_hidden=False, 
+                  T1=5.0, control_coef=0.5, dynamic_hidden=False, 
                   alpha1=1, alpha2=0.1, beta=1, 
                   num_epoch=20, num_iter=20, batch_size=32, lr=1e-3, 
                   log_interval=50):
@@ -167,13 +167,15 @@ def train_phase_2(adj_net, hnet, hnet_decoder, z_decoder, z_encoder, qs, T2=1.0,
                 cnt = 0
 
 
-                '''
- def train_phase_3(adj_net, hnet, hnet_decoder, z_decoder, z_encoder, policy_net, qs, T2=1.0, beta=1.0, 
+ def train_phase_3(env, adj_net, hnet, hnet_decoder, z_decoder, z_encoder, policy_net, qs, T2=1.0, beta=1.0, 
                   num_epoch=20, num_iter=20, batch_size=32, lr=1e-3, log_interval=50):
     
+    hd_net = HDNet(hnet=hnet)
     hd_vae_net = HDVAE(adj_net, hnet, hnet_decoder, z_encoder, z_decoder, T2)
+    time_steps = list(np.arange(0, T2, 0.05)
+    policy_rollout_net = PolicyRollout(env.f, adj_net, hnet, z_decoder, policy_net, time_steps)
     # Optimizer for Hamiltonian net decoder, (additional) latent encoder and decoder
-    optim = torch.optim.Adam(list(polic_net.parameters()), lr=lr)
+    optim = torch.optim.Adam(list(policy_net.parameters()), lr=lr)
     optim.zero_grad()
     
     # Training over the same data qs num_epoch epochs
@@ -185,15 +187,26 @@ def train_phase_2(adj_net, hnet, hnet_decoder, z_decoder, z_encoder, qs, T2=1.0,
         total_loss = 0
         for j in range(num_iter):
             # state training examples
-            q = q_dat[np.random.choice(num_samples, batch_size, replace=False)] #[j*batch_size:(j+1)*batch_size]
-            # Hamiltonian VAE net returns starting coupled state (state+adjoint)
-            # terminal coupled state and its construction, starting state construction
-            # mean and logvar of the actual latent variable mapped from terminal state 
-            qp, qp_hat, qpt, qpt_hat, mu, logvar = hd_vae_net(q)
-            # Reconstruction loss
-            loss = F.smooth_l1_loss(qp, qp_hat) +  F.smooth_l1_loss(qpt, qpt_hat)
-            # KL loss
-            loss += beta * kl_loss(mu, logvar)
+            q = q_dat[np.random.choice(num_samples, batch_size, replace=False)]  
+            _, _, qpt, qpt_hat, mu, logvar = hd_vae_net(q)
+            std = torch.exp(0.5*logvar)
+            eps = torch.randn_like(std)
+            z_val = mu + eps*std
+
+            qpt_c = policy_rollout_net(q, z_val)
+            qt, pt = torch.chunk(qpt_c, 2, dim=1)
+            qt_np = qt.detach().numpy()
+
+            # Decoder vs Propagatioin Loss
+            loss = F.smooth_l1_loss(qpt_c[-1], qpt_hat) 
+
+            dg = torch.tensor(env.nabla_g(qt_np[-1]))
+
+            # End point loss
+            loss += F.smooth_l1_loss(dg, pt[-1]) 
+
+            # Dynamics Loss
+            loss += F.sooth_l1_loss(env.f(qt, policy_net(qt, pt, z_val)), hd_net(qpt_c)[:, 0:1])
 
             # Optimize step
             loss.backward()
@@ -205,8 +218,6 @@ def train_phase_2(adj_net, hnet, hnet_decoder, z_decoder, z_encoder, qs, T2=1.0,
                 print('Average loss for {}th iteration is: {}'.format(j+1, total_loss/cnt))
                 total_loss = 0
                 cnt = 0
-
-                '''
 
 # Main training including phase 1 and phase 2 sequentially
 def main_training(env, env_name, qs, 
