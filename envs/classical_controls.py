@@ -133,7 +133,7 @@ class MountainCar(ContinuousEnv):
 
     def render(self, u, mode="rgb_array"):
         # print(u)gym_env
-        print("Before: ", self.gym_env.unwrapped.state)
+        # print("Before: ", self.gym_env.unwrapped.state)
         self.gym_env.step(u)
         frame = self.gym_env.render()
         return frame

@@ -93,9 +93,9 @@ def train_phase_1(env, adj_net, hnet, policy_net, qs,
 
             ## Second part of loss function: beta1 * (h(q, p) - ((p, f(q, u)) + L(q, u)))
             # Calculate optimal u = -p^T f_u(q, u) (based on adjoint)
-            # u = (1.0/control_coef)*np.einsum('ijk,ij->ik', env.f_u(q_np), -p_np)
+            u = (1.0/control_coef)*np.einsum('ijk,ij->ik', env.f_u(q_np), -p_np)
 
-            u = policy_net(q_np, -p_np, env.f_u)
+            # u = policy_net(q_np, -p_np, env.f_u)
 
 
             #print('u', u.shape)
