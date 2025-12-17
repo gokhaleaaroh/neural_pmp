@@ -4,6 +4,7 @@ import torch
 from torchdiffeq import odeint_adjoint as odeint
 from model_nets import HDNet
 import utils
+import matplotlib.pyplot as plt
 
 def run_traj(env, adj_net, hnet, hnet_decoder, env_name,
              num_trajs, time_steps, test_trained, phase2,
@@ -30,23 +31,72 @@ def run_traj(env, adj_net, hnet, hnet_decoder, env_name,
     
     # Run optimal trajectory
     q = torch.tensor(env.sample_q(num_trajs, mode='test'), dtype=torch.float)
-    if save_video:
-        q_0, _ = env.gym_env.reset()
-        q = torch.tensor(np.array([q_0]), dtype=torch.float)
+    # if save_video:
+    #     q_0, _ = env.gym_env.reset()
+    #     q = torch.tensor(np.array([q_0]), dtype=torch.float)
     p = adj_net(q)
     qp = torch.cat((q, p), axis=1)
 
     traj = odeint(HDnet, qp, torch.tensor(time_steps, requires_grad=False))
+        
     print('Done finding trajectory...')
     print(traj[-1][-1])
- 
+
     # Collect results and optionally save to videos
     final_costs_expected = []
     final_costs_controller = []
  
-    qe, _ = torch.chunk(traj[0], 2, dim=1)
+
+    qe, pe = torch.chunk(traj[-1], 2, dim=1)
     qe_np = qe.detach().numpy()
-    pe = -adj_net(qe.to(torch.float32))
+    pe_np = pe.detach().numpy()
+    # pe = -adj_net(qe.to(torch.float32))
+
+    qe_plot, pe_plot = torch.chunk(traj[:, 0, :], 2, dim=1)
+    qe_plot_np = qe_plot.detach().numpy()
+    pe_plot_np = pe_plot.detach().numpy()
+
+    print(qe_plot.shape)
+
+    # print("trajectory: ", traj[:, 0, :].shape)
+    # print("trajectory: ", qe_plot_np)
+    if save_video:
+
+        fig, axes = plt.subplots(1, 3, figsize=(4*3, 4))
+
+        axes[0].plot(qe_plot_np[:, 0], pe_plot_np[:, 0], marker='o')
+        axes[0].set_xlabel('q1')
+        axes[0].set_ylabel('p1')
+        axes[0].set_title('Mountain Car in (q, p) space 1')
+
+        axes[1].plot(qe_plot_np[:, 1], pe_plot_np[:, 1], marker='o')
+        axes[1].set_xlabel('q2')
+        axes[1].set_ylabel('p2')
+        axes[1].set_title('Mountain Car in (q, p) space 2')
+
+        # axes[0][2].plot(qe_plot_np[:, 2], pe_plot_np[:, 2], marker='o')
+        # axes[0][2].set_xlabel('q3')
+        # axes[0][2].set_ylabel('p3')
+        # axes[0][2].set_title('Cart Pole in (q, p) space 3')
+
+        axes[2].plot(qe_plot_np[:, 0], qe_plot_np[:, 1], marker='o')
+        axes[2].set_xlabel('q')
+        axes[2].set_ylabel('q\'')
+        axes[2].set_title('Mountain Car in (q, q\') phase space')
+
+        # axes[1][1].plot(qe_plot_np[:, 0], qe_plot_np[:, 1], marker='o')
+        # axes[1][1].set_xlabel('position')
+        # axes[1][1].set_ylabel('velocity')
+        # axes[1][1].set_title('Cart Pole in horizontal space')
+
+        # axes[1][2].plot(qe_plot_np[:, 2], qe_plot_np[:, 3], marker='o')
+        # axes[1][2].set_xlabel('angle')
+        # axes[1][2].set_ylabel('angular velocity')
+        # axes[1][2].set_title('Cart Pole in angular space')
+
+        plt.tight_layout()
+        plt.show()
+
 
     qc = qe.clone()
     qc_np = qc.detach().numpy()
@@ -55,9 +105,10 @@ def run_traj(env, adj_net, hnet, hnet_decoder, env_name,
     # print("State: ", q_np)
     for i in range(0, len(time_steps) - 1):
         final_costs_expected.append(env.eval(qe_np))
-        final_costs_controller.append(env.eval(qc_np))
+        final_costs_controller.append(env.eval(qe_np))
         control_coef = 0.5
         u_hat = (1.0/control_coef)*np.einsum('ijk,ij->ik', env.f_u(qc_np), -pc.detach().numpy())
+        # u_hat = -pc.detach().numpy()
         # u_hat = torch.tensor([[1]])
         if save_video:
             # Write rendering image
@@ -65,14 +116,14 @@ def run_traj(env, adj_net, hnet, hnet_decoder, env_name,
 
         time_step = time_steps[i + 1] - time_steps[i]
 
-        if i < len(time_steps) - 2:
-            qe, _ = torch.chunk(traj[i + 1], 2, dim=1)
-            qe_np = qe.detach().numpy()
-            pe = -adj_net(qe.to(torch.float32))
+        # if i < len(time_steps) - 2:
+        #     qe, _ = torch.chunk(traj[i + 1], 2, dim=1)
+        #     qe_np = qe.detach().numpy()
+        #     pe = -adj_net(qe.to(torch.float32))
 
-            qc = env.step(qc, torch.tensor(u_hat), dt=time_step)
-            qc_np = qc.detach().numpy()
-            pc = adj_net(qc.to(torch.float32))
+        #     qc = env.step(qc, torch.tensor(u_hat), dt=1)
+        #     qc_np = qc.detach().numpy()
+        #     pc = adj_net(qc.to(torch.float32))
 
     final_costs_expected.append(env.eval(qe_np))
     final_costs_controller.append(env.eval(qc_np))
@@ -83,7 +134,7 @@ def run_traj(env, adj_net, hnet, hnet_decoder, env_name,
 
     env.close()
     # (num_traj, num_step)
-    return np.swapaxes(np.array(final_costs_expected, dtype=float), 0, 1), np.swapaxes(np.array(final_costs_controller, dtype=float), 0, 1)
+    return np.swapaxes(np.array(final_costs_expected, dtype=float), 0, 1), np.swapaxes(np.array(final_costs_controller, dtype=float), 0, 1) 
 
 def _test(env_name, num_trajs, time_steps, test_trained, phase2):
     # Initialize models (this first to take state dimension q_dim)
