@@ -32,10 +32,8 @@ def run_traj(env, adj_net, hnet, hnet_decoder, env_name,
     q = torch.tensor(env.sample_q(num_trajs, mode='test'), dtype=torch.float)
     if save_video:
         q_0, _ = env.gym_env.reset()
-        q = torch.tensor([q_0], dtype=torch.float)
+        q = torch.tensor(np.array([q_0]), dtype=torch.float)
     p = adj_net(q)
-    print(q.shape)
-    print(p.shape)
     qp = torch.cat((q, p), axis=1)
 
     traj = odeint(HDnet, qp, torch.tensor(time_steps, requires_grad=False))
@@ -47,18 +45,20 @@ def run_traj(env, adj_net, hnet, hnet_decoder, env_name,
  
     q, _ = torch.chunk(qp, 2, dim=1)
     q_np = q.detach().numpy()
+    print("State: ", q_np)
     final_costs.append(env.eval(q_np))
     for i in range(0, len(time_steps) - 1):
-        q_np = q.detach().numpy()
         final_costs.append(env.eval(q_np))
         control_coef = 0.5
-        u_hat = -(1.0/control_coef)*np.einsum('ijk,ij->ik', env.f_u(q_np), adj_net(q.to(torch.float32)).detach().numpy())
-        # if save_video:
+        # u_hat = -(1.0/control_coef)*np.einsum('ijk,ij->ik', env.f_u(q_np), adj_net(q.to(torch.float32)).detach().numpy())
+        u_hat = torch.tensor([[1]])
+        if save_video:
             # Write rendering image
-            # out.write(env.render(u_hat[0]))
+            out.write(env.render(u_hat[0]))
 
         time_step = time_steps[i + 1] - time_steps[i]
-        q = env.step(q, torch.tensor(u_hat), dt=time_step)
+        q = env.step(q, torch.tensor(u_hat), dt=1)
+        q_np = q.detach().numpy()
 
     # Release video
     if save_video:
@@ -119,4 +119,4 @@ def visualize(env_name, time_steps, test_trained, phase2):
     env = utils.get_environment(env_name) 
     run_traj(env, adj_net, hnet, hnet_decoder, env_name,
              1, time_steps, test_trained, phase2,
-             save_video=True, video_path=video_path)
+             save_video=False, video_path=video_path)

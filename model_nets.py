@@ -68,3 +68,21 @@ class HDVAE(nn.Module):
         qp_hat = odeint(self.hd_inverse_net, qpt_hat, torch.tensor(times, requires_grad=True))[-1]
         
         return qp, qp_hat, qpt, qpt_hat, mu, logvar
+
+    '''
+class PolicyRollout(nn.Module):
+    def __init__(self, dynamics, adj_net, hnet, z_decoder, policy_net, T):
+        super(PolicyRollout, self).__init__()
+        self.T = T
+        self.f = lambda q, z : dynamics(q, policy_net(q, adj_net(q), z))
+        self.adj_net = adj_net
+        self.hd_net = HDNet(hnet)
+        self.z_decoder = z_decoder
+
+    def forward(self, q):
+        times = [0, self.T]
+        p = self.adj_net(q)
+        qp = torch.cat((q, p), dim=1)
+        qpt = odeint(torch.cat(()))
+
+    '''
