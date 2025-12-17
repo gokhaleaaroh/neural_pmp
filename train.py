@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from torchdiffeq import odeint_adjoint as odeint
 from model_nets import HDNet, HDVAE, HDInverseNet
 import utils
+from collections import defaultdict
+import matplotlib.pyplot as plt
 
 # Get extreme samples for more focusing.
 def get_extreme_samples(env, adj_net, hnet, hnet_decoder, z_decoder, z_encoder, 
@@ -44,6 +46,39 @@ def get_extreme_samples(env, adj_net, hnet, hnet_decoder, z_decoder, z_encoder,
 def kl_loss(mu, logvar):
     return torch.mean(-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1), dim=0)
 
+
+def network_contribution(optimizer, module_dict):
+    contrib = defaultdict(float)
+    for group in optimizer.param_groups:
+        lr = group["lr"]
+        beta1, beta2 = group["betas"]
+        eps = group["eps"]
+
+        for p in group["params"]:
+            if p.grad is None:
+                continue
+
+            state = optimizer.state[p]
+            if len(state) == 0:
+                continue
+
+            m = state["exp_avg"]
+            v = state["exp_avg_sq"]
+
+            step = state["step"]
+            m_hat = m / (1 - beta1 ** step)
+            v_hat = v / (1 - beta2 ** step)
+                
+            update = lr * m_hat / (v_hat.sqrt() + eps)
+            update_norm = update.norm().item()
+
+            for name, params in module_dict.items():
+                if p in params:
+                    contrib[name] += update_norm
+                    break
+
+    return contrib
+        
 # Train phase 1
 def train_phase_1(env, adj_net, hnet, policy_net, qs, 
                   T1=5.0, control_coef=0.5, dynamic_hidden=False, 
@@ -59,7 +94,12 @@ def train_phase_1(env, adj_net, hnet, policy_net, qs,
     times = [0, T1]
     # Generate num_samples data qs consisting of only state (q) samples
     num_samples = qs.shape[0]
+
+    p_updates = []
+    h_updates = []
+
     # Training over the same data qs num_epoch epochs
+    print("Training for ", num_epoch, " epochs")
     for i in range(num_epoch):
         print('\nEpoch {}: '.format(i+1))
         loss = 0; cnt = 0
@@ -97,7 +137,6 @@ def train_phase_1(env, adj_net, hnet, policy_net, qs,
 
             # u = policy_net(q_np, -p_np, env.f_u)
 
-
             #print('u', u.shape)
             if dynamic_hidden:
                 # (p, f(q, u)) + L(q, u) = (p, qdot_np) + L(q, u)
@@ -116,6 +155,12 @@ def train_phase_1(env, adj_net, hnet, policy_net, qs,
 
             # Optimize step
             loss.backward()
+
+            contrib = network_contribution(optim, {"P-net" : set(adj_net.parameters()), "H-net" : set(hnet.parameters())})
+
+            p_updates.append(contrib["P-net"])
+            h_updates.append(contrib["H-net"])
+
             optim.step(); optim.zero_grad()
             # Print progress
             total_loss += loss.item()
@@ -124,6 +169,8 @@ def train_phase_1(env, adj_net, hnet, policy_net, qs,
                 print('Average loss for {}th iteration is: {}'.format(j+1, total_loss/cnt))
                 total_loss = 0
                 cnt = 0
+
+    return p_updates, h_updates 
 
 # Train phase 2
 def train_phase_2(adj_net, hnet, hnet_decoder, z_decoder, z_encoder, qs, T2=1.0, beta=1.0, 
@@ -136,6 +183,10 @@ def train_phase_2(adj_net, hnet, hnet_decoder, z_decoder, z_encoder, qs, T2=1.0,
                              list(z_decoder.parameters()), lr=lr)
     optim.zero_grad()
     
+    h_decoder_updates = []
+    z_encoder_updates = []
+    z_decoder_updates = []
+
     # Training over the same data qs num_epoch epochs
     num_samples = qs.shape[0]
     for i in range(num_epoch):
@@ -157,6 +208,13 @@ def train_phase_2(adj_net, hnet, hnet_decoder, z_decoder, z_encoder, qs, T2=1.0,
 
             # Optimize step
             loss.backward()
+
+            contrib = network_contribution(optim, {"h-dec-net" : set(hnet_decoder.parameters()), "z-enc-net" : set(z_encoder.parameters()), "z-dec-net" : set(z_decoder.parameters())})
+
+            h_decoder_updates.append(contrib["h-dec-net"]) 
+            z_encoder_updates.append(contrib["z-enc-net"]) 
+            z_decoder_updates.append(contrib["z-dec-net"]) 
+
             optim.step(); optim.zero_grad()
             # Print progress
             total_loss += loss.item()
@@ -166,7 +224,9 @@ def train_phase_2(adj_net, hnet, hnet_decoder, z_decoder, z_encoder, qs, T2=1.0,
                 total_loss = 0
                 cnt = 0
 
+    return h_decoder_updates, z_encoder_updates, z_decoder_updates 
 
+'''
  def train_phase_3(env, adj_net, hnet, hnet_decoder, z_decoder, z_encoder, policy_net, qs, T2=1.0, beta=1.0, 
                   num_epoch=20, num_iter=20, batch_size=32, lr=1e-3, log_interval=50):
     
@@ -219,6 +279,8 @@ def train_phase_2(adj_net, hnet, hnet_decoder, z_decoder, z_encoder, qs, T2=1.0,
                 total_loss = 0
                 cnt = 0
 
+'''
+
 # Main training including phase 1 and phase 2 sequentially
 def main_training(env, env_name, qs, 
                   adj_net, hnet, policy_net, hnet_decoder, z_decoder, z_encoder, 
@@ -249,9 +311,17 @@ def main_training(env, env_name, qs,
     # Train phase 1 only for deterministic Hamiltonian. NeuralPMP-phase1
     if retrain_phase1:
         print('\nTraining phase 1...')
-        train_phase_1(env, adj_net, hnet, policy_net, qs, 
+        log_p, log_h = train_phase_1(env, adj_net, hnet, policy_net, qs, 
             T1, control_coef, dynamic_hidden, alpha1, alpha2, beta1,
             num_epoch1, num_iter1, batch_size1, lr1, log_interval1)
+
+        plt.plot(log_p, label="P-net update norm")
+        plt.plot(log_h, label="H-net update norm")
+        plt.legend()
+        plt.yscale("log")
+        plt.title("Adam update magnitude per sub-network")
+        plt.show()
+
     else:
         utils.load_models_phase1(adj_net, hnet, env_name)
         print('\nLoaded phase 1 trained models (adjoint net and Hamiltonian net).\n')
@@ -262,8 +332,16 @@ def main_training(env, env_name, qs,
             print('\nTraining phase 2...')
             num_examples = int(num_examples_phase2*qs.shape[0])
             qs2 = torch.clone(qs)[torch.randperm(qs.shape[0])][:num_examples]
-            train_phase_2(adj_net, hnet, hnet_decoder, z_decoder, z_encoder, qs2, 
-                      T2, beta2, num_epoch2, num_iter2, batch_size2, lr2, log_interval2)
+            log_h, log_ze, log_zd = train_phase_2(adj_net, hnet, hnet_decoder, z_decoder, z_encoder, qs2, T2, beta2, num_epoch2, num_iter2, batch_size2, lr2, log_interval2)
+
+            plt.plot(log_h, label="H-net decoder update norm")
+            plt.plot(log_ze, label="z encoder update norm")
+            plt.plot(log_zd, label="z decoder update norm")
+            plt.legend()
+            plt.yscale("log")
+            plt.title("Adam update magnitude per sub-network")
+            plt.show()
+
         else:
             utils.load_models_phase2(hnet_decoder, z_encoder, z_decoder, env_name)
             print('\nLoaded phase 2 trained models (Hamiltonian decoder and latent encoder and decoder).\n')
@@ -309,12 +387,14 @@ def train(env_name, num_examples, mode=0,
     # Starting point samples
     q_samples = torch.tensor(env.sample_q(num_examples, mode='train'), dtype=torch.float)
 
+    policy_net = 0
     # Main training
     main_training(env, env_name, q_samples, 
                   adj_net, hnet, policy_net, hnet_decoder, z_decoder, z_encoder, 
-        T1=T1, T2=T2, control_coef=control_coef, dynamic_hidden=dynamic_hidden,
+        T1=1.0, T2=1.0, control_coef=control_coef, dynamic_hidden=dynamic_hidden,
         alpha1=alpha1, alpha2=alpha2, beta1=beta1, beta2=beta2,
         num_epoch1=num_epoch1, num_iter1=num_iter1, batch_size1=batch_size1, lr1=lr1, log_interval1=log_interval1, 
         num_epoch2=num_epoch2, num_iter2=num_iter2, batch_size2=batch_size2, lr2=lr2, log_interval2=log_interval2,
         mode=mode, retrain_phase1=retrain_phase1, retrain_phase2=retrain_phase2,
-        num_examples_phase2=num_examples_phase2, num_additional_train=num_additional_train)
+        num_examples_phase2=num_examples_phase2, num_ad
+ditional_train=num_additional_train)
